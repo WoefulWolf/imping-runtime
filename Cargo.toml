@@ -11,10 +11,12 @@ publish = false
 # Sibling suite repo, by relative path during development.
 imping-hook = { path = "../imping-hook" }
 log = "0.4"
+# UTF-16 strings behind `WString` and `WStrPtr`.
+widestring = "1"
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61"
-features = ["Win32_System_LibraryLoader"]
+features = ["Win32_Globalization", "Win32_System_LibraryLoader"]
 
 [lints.rust]
 missing_docs = "warn"

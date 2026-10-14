@@ -23,10 +23,42 @@ pub(crate) fn locate(name: &str) -> Result<(usize, Identity), LocateError> {
     imp::locate(name)
 }
 
+/// Decodes bytes in the system's ANSI code page; lossy UTF-8 where there is
+/// no such code page.
+pub(crate) fn ansi_to_string(bytes: &[u8]) -> String {
+    imp::ansi_to_string(bytes)
+}
+
 #[cfg(windows)]
 mod imp {
     use super::{Identity, LocateError};
+    use windows_sys::Win32::Globalization::{CP_ACP, MultiByteToWideChar};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+
+    pub(super) fn ansi_to_string(bytes: &[u8]) -> String {
+        let Ok(len) = i32::try_from(bytes.len()) else {
+            return String::from_utf8_lossy(bytes).into_owned();
+        };
+        if len == 0 {
+            return String::new();
+        }
+        // SAFETY: `bytes` is valid for `len` bytes; a null output buffer of
+        // size 0 asks only for the length needed.
+        let needed = unsafe {
+            MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, core::ptr::null_mut(), 0)
+        };
+        let Ok(capacity) = usize::try_from(needed) else {
+            return String::from_utf8_lossy(bytes).into_owned();
+        };
+        let mut wide = vec![0u16; capacity];
+        // SAFETY: `bytes` is valid for `len` bytes and `wide` for `needed`
+        // code units.
+        let written = unsafe {
+            MultiByteToWideChar(CP_ACP, 0, bytes.as_ptr(), len, wide.as_mut_ptr(), needed)
+        };
+        let written = usize::try_from(written).unwrap_or(0).min(capacity);
+        String::from_utf16_lossy(&wide[..written])
+    }
 
     /// Headers beyond this offset are not plausible; it bounds every read.
     const MAX_HEADER_OFFSET: u32 = 0x1000;
@@ -93,6 +125,10 @@ mod imp {
 #[cfg(not(windows))]
 mod imp {
     use super::{Identity, LocateError};
+
+    pub(super) fn ansi_to_string(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes).into_owned()
+    }
 
     pub(super) fn locate(_name: &str) -> Result<(usize, Identity), LocateError> {
         Err(LocateError::Unsupported)
