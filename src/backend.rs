@@ -11,6 +11,18 @@ pub(crate) trait Patch<F>: Send + Sync {
     fn disable(&self) -> Result<(), imping_hook::Error>;
     /// Whether the target is redirected.
     fn is_enabled(&self) -> bool;
+    /// Redirects the target without suspending other threads.
+    ///
+    /// # Safety
+    ///
+    /// No other thread may execute the patched instructions meanwhile.
+    unsafe fn enable_unsuspended(&self) -> Result<(), imping_hook::Error>;
+    /// Restores the target without suspending other threads.
+    ///
+    /// # Safety
+    ///
+    /// No other thread may execute the patched instructions meanwhile.
+    unsafe fn disable_unsuspended(&self) -> Result<(), imping_hook::Error>;
 }
 
 impl<F: imping_hook::Function + Send + Sync> Patch<F> for imping_hook::Hook<F> {
@@ -24,6 +36,16 @@ impl<F: imping_hook::Function + Send + Sync> Patch<F> for imping_hook::Hook<F> {
 
     fn is_enabled(&self) -> bool {
         imping_hook::Hook::is_enabled(self)
+    }
+
+    unsafe fn enable_unsuspended(&self) -> Result<(), imping_hook::Error> {
+        // SAFETY: forwarded from the caller.
+        unsafe { imping_hook::Hook::enable_unsuspended(self) }
+    }
+
+    unsafe fn disable_unsuspended(&self) -> Result<(), imping_hook::Error> {
+        // SAFETY: forwarded from the caller.
+        unsafe { imping_hook::Hook::disable_unsuspended(self) }
     }
 }
 

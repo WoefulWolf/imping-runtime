@@ -12,9 +12,12 @@ use core::marker::PhantomData;
 /// access the variable safely; otherwise go through [`ptr`](Self::ptr).
 ///
 /// ```no_run
-/// use imping_runtime::{Global, Module};
+/// use imping_runtime::{Build, Global, Module};
 ///
-/// static GAME: Module = Module::new("game.exe", 0x64b8f2a1, 0xa2b000);
+/// static GAME: Module = Module::new(
+///     "game.exe",
+///     &[Build { timestamp: 0x64b8f2a1, image_size: 0xa2b000 }],
+/// );
 /// static GRAVITY: Global<f32> = Global::new(&GAME, 0x3a1200);
 ///
 /// # fn main() -> imping_runtime::Result<()> {

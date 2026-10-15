@@ -4,7 +4,7 @@
 #![cfg(all(windows, target_arch = "x86_64"))]
 
 use imping_runtime::__private::{Slot, install};
-use imping_runtime::{Error, Global, Hook, Module, Result};
+use imping_runtime::{Build, Error, Global, Hook, Module, Result};
 use std::hint::black_box;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -22,17 +22,13 @@ fn exe() -> &'static Module {
             .to_str()
             .expect("UTF-8 name");
         let name: &'static str = Box::leak(name.to_owned().into_boxed_str());
-        let probe = Module::new(name, 0, 0);
+        let probe = Module::new(name, &[]);
         // SAFETY: Nothing is done through `probe` beyond checking its identity.
-        let (timestamp, image_size) = match unsafe { probe.init() } {
-            Err(Error::BuildMismatch {
-                found_timestamp,
-                found_image_size,
-                ..
-            }) => (found_timestamp, found_image_size),
+        let build = match unsafe { probe.init() } {
+            Err(Error::BuildMismatch { found, .. }) => found,
             other => panic!("expected a build mismatch, got {other:?}"),
         };
-        let module: &'static Module = Box::leak(Box::new(Module::new(name, timestamp, image_size)));
+        let module: &'static Module = Box::leak(Box::new(Module::new(name, vec![build].leak())));
         // SAFETY: The fixtures below are real functions of this executable with
         // the signatures declared for them.
         unsafe { module.init() }.expect("init");
@@ -103,6 +99,8 @@ fixture!(verified: fn(a: i32) -> i32 { black_box(a) + 3 });
 fixture!(captures: fn(a: i32) -> i32 { black_box(a) + 4 });
 fixture!(stress: fn(a: i32) -> i32 { black_box(a) + 5 });
 fixture!(changed: fn(a: i32) -> i32 { black_box(a) + 6 });
+fixture!(unsuspended: fn(a: i32) -> i32 { black_box(a) + 7 });
+fixture!(batched: fn(a: i32) -> i32 { black_box(a) + 8 });
 
 #[test]
 fn install_enable_disable_original_and_drop() {
@@ -210,7 +208,13 @@ fn verification_bytes_are_checked_before_patching() {
 
 #[test]
 fn hooks_need_an_initialized_module() {
-    static NEVER: Module = Module::new("never.dll", 1, 1);
+    static NEVER: Module = Module::new(
+        "never.dll",
+        &[Build {
+            timestamp: 1,
+            image_size: 1,
+        }],
+    );
     type Signature = unsafe extern "system" fn() -> i32;
     static SLOT: Slot<dyn Fn(Signature) -> i32 + Send + Sync, Signature> = Slot::new();
     unsafe extern "system" fn thunk() -> i32 {
@@ -341,4 +345,27 @@ fn dropping_and_rehooking_while_other_threads_call() {
         .sum();
     assert!(calls > 0);
     assert_eq!(stress::target(1), 6, "the last guard was dropped");
+}
+
+#[test]
+fn hooks_can_be_toggled_without_suspending_threads() {
+    let hook = unsuspended::hook(&[], |_, a| a * 100).expect("hook");
+    // SAFETY: No other thread calls this fixture.
+    unsafe { hook.enable_unsuspended() }.expect("enable");
+    assert!(hook.is_enabled());
+    assert_eq!(unsuspended::target(1), 100);
+    // SAFETY: As above.
+    unsafe { hook.disable_unsuspended() }.expect("disable");
+    assert_eq!(unsuspended::target(1), 8);
+}
+
+#[test]
+fn hooks_join_an_imping_hook_batch() {
+    let hook = batched::hook(&[], |_, a| a * 100).expect("hook");
+    let failed = imping_hook::batch(|| {
+        hook.enable().expect("queued");
+        assert!(!hook.is_enabled(), "applied when the batch ends");
+    });
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(batched::target(1), 100);
 }

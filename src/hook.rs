@@ -35,7 +35,9 @@ impl<F: Copy + 'static> Hook<F> {
     /// Redirects the function to the hook's closure.
     ///
     /// Every other thread of the process is suspended while the function is
-    /// patched. Don't call this from within the hooked function itself.
+    /// patched. Don't call this from within the hooked function itself. Inside
+    /// an `imping_hook::batch` the change is queued and applied when the batch
+    /// ends, together with the batch's other changes.
     ///
     /// # Errors
     ///
@@ -52,7 +54,9 @@ impl<F: Copy + 'static> Hook<F> {
     /// Restores the function, so calls no longer reach the closure.
     ///
     /// Every other thread of the process is suspended while the function is
-    /// patched. Don't call this from within the hooked function itself.
+    /// patched. Don't call this from within the hooked function itself. Inside
+    /// an `imping_hook::batch` the change is queued and applied when the batch
+    /// ends.
     ///
     /// # Errors
     ///
@@ -61,6 +65,45 @@ impl<F: Copy + 'static> Hook<F> {
         self.installed
             .patch
             .disable()
+            .map_err(|source| self.installed.error(source))?;
+        log::debug!("imping: disabled hook at {}", self.installed.location());
+        Ok(())
+    }
+
+    /// Redirects the function to the hook's closure without suspending other
+    /// threads: faster than [`enable`](Self::enable), which has to find and
+    /// suspend them all. Takes effect at once, also inside a batch.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Hook`] if the hooking engine fails.
+    ///
+    /// # Safety
+    ///
+    /// No other thread may execute the function's first instructions while
+    /// they are patched, or it may run a half-written instruction.
+    pub unsafe fn enable_unsuspended(&self) -> Result<()> {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.installed.patch.enable_unsuspended() }
+            .map_err(|source| self.installed.error(source))?;
+        log::debug!("imping: enabled hook at {}", self.installed.location());
+        Ok(())
+    }
+
+    /// Restores the function without suspending other threads; see
+    /// [`enable_unsuspended`](Self::enable_unsuspended).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Hook`] if the hooking engine fails.
+    ///
+    /// # Safety
+    ///
+    /// No other thread may execute the function's first instructions while
+    /// the original ones are written back.
+    pub unsafe fn disable_unsuspended(&self) -> Result<()> {
+        // SAFETY: forwarded from the caller.
+        unsafe { self.installed.patch.disable_unsuspended() }
             .map_err(|source| self.installed.error(source))?;
         log::debug!("imping: disabled hook at {}", self.installed.location());
         Ok(())

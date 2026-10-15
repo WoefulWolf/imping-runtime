@@ -22,9 +22,12 @@
 //! # Example
 //!
 //! ```no_run
-//! use imping_runtime::{Global, Module};
+//! use imping_runtime::{Build, Global, Module};
 //!
-//! static GAME: Module = Module::new("game.exe", 0x64b8f2a1, 0xa2b000);
+//! static GAME: Module = Module::new(
+//!     "game.exe",
+//!     &[Build { timestamp: 0x64b8f2a1, image_size: 0xa2b000 }],
+//! );
 //! static GRAVITY: Global<f32> = Global::new(&GAME, 0x3a1200);
 //!
 //! fn main() -> imping_runtime::Result<()> {
@@ -82,7 +85,7 @@ pub use crate::error::{Error, Result};
 pub use crate::global::Global;
 pub use crate::hook::Hook;
 pub use crate::inherits::{Inherits, Upcast};
-pub use crate::module::Module;
+pub use crate::module::{Build, Module};
 pub use crate::plain::Plain;
 pub use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr, WString};
 

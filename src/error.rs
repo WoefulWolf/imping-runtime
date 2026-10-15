@@ -1,5 +1,6 @@
 //! The error type.
 
+use crate::module::Build;
 use core::fmt;
 
 /// The result of a runtime operation.
@@ -17,18 +18,14 @@ pub enum Error {
         /// The module's file name.
         module: &'static str,
     },
-    /// The loaded module is a different build than the one expected.
+    /// The loaded module is none of the builds the bindings accept.
     BuildMismatch {
         /// The module's file name.
         module: &'static str,
-        /// The timestamp the bindings expect.
-        expected_timestamp: u32,
-        /// The timestamp of the loaded module.
-        found_timestamp: u32,
-        /// The image size the bindings expect.
-        expected_image_size: u32,
-        /// The image size of the loaded module.
-        found_image_size: u32,
+        /// The build that is loaded.
+        found: Build,
+        /// The builds the bindings accept.
+        expected: &'static [Build],
     },
     /// The loaded module's headers could not be read.
     InvalidImage {
@@ -80,16 +77,26 @@ impl fmt::Display for Error {
             }
             Error::BuildMismatch {
                 module,
-                expected_timestamp,
-                found_timestamp,
-                expected_image_size,
-                found_image_size,
-            } => write!(
-                f,
-                "`{module}` is a different build than the bindings were generated from: \
-                 timestamp {found_timestamp:#x} (expected {expected_timestamp:#x}), \
-                 image size {found_image_size:#x} (expected {expected_image_size:#x})"
-            ),
+                found,
+                expected,
+            } => {
+                write!(
+                    f,
+                    "`{module}` is a different build than the bindings accept: \
+                     found timestamp {:#x}, image size {:#x}; accepted ",
+                    found.timestamp, found.image_size
+                )?;
+                if expected.is_empty() {
+                    return f.write_str("none");
+                }
+                for (i, build) in expected.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{:#x}/{:#x}", build.timestamp, build.image_size)?;
+                }
+                Ok(())
+            }
             Error::InvalidImage { module } => write!(f, "`{module}` has unreadable PE headers"),
             Error::NotInitialized { module } => {
                 write!(f, "`{module}` is not initialized; call its `init()` first")
