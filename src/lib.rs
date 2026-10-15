@@ -12,6 +12,8 @@
 //! - Strings in the target's memory: [`CStrPtr`] and [`WStrPtr`] for `char*`
 //!   and `wchar_t*`, [`CStrBuf`] and [`WStrBuf`] for fixed-size buffers in
 //!   structs, and [`WString`] to pass UTF-16 text to the target.
+//! - Base classes: [`Inherits`] records that a class derives from another, and
+//!   [`Upcast::upcast`] turns a pointer to a class into a pointer to a base.
 //! - [`Error`]: everything that can go wrong.
 //!
 //! [`Module`], [`Global`] and the string types are also usable on their own,
@@ -70,6 +72,7 @@ mod backend;
 mod error;
 mod global;
 mod hook;
+mod inherits;
 mod module;
 mod plain;
 mod strings;
@@ -78,6 +81,7 @@ mod sys;
 pub use crate::error::{Error, Result};
 pub use crate::global::Global;
 pub use crate::hook::Hook;
+pub use crate::inherits::{Inherits, Upcast};
 pub use crate::module::Module;
 pub use crate::plain::Plain;
 pub use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr, WString};
