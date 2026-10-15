@@ -4,7 +4,7 @@
 #![cfg(all(windows, target_arch = "x86_64"))]
 
 use imping_runtime::__private::{Slot, install};
-use imping_runtime::{Error, Hook, Module, Result};
+use imping_runtime::{Error, Global, Hook, Module, Result};
 use std::hint::black_box;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -46,17 +46,38 @@ macro_rules! fixture {
     ($name:ident: fn($($arg:ident: $ty:ty),*) -> $ret:ty $body:block) => {
         mod $name {
             use super::*;
+            use std::marker::PhantomData;
 
             pub type Signature = unsafe extern "system" fn($($ty),*) -> $ret;
 
             #[inline(never)]
             pub extern "system" fn target($($arg: $ty),*) -> $ret $body
 
-            static SLOT: Slot<dyn Fn(Signature, $($ty),*) -> $ret + Send + Sync, Signature> = Slot::new();
+            /// The original function and the arguments of the hooked call.
+            /// Not every fixture uses both of its methods.
+            #[allow(dead_code)]
+            pub struct Original<'call>(Signature, ($($ty,)*), PhantomData<&'call ()>);
+
+            #[allow(dead_code)]
+            impl Original<'_> {
+                pub fn forward(self) -> $ret {
+                    let ($($arg,)*) = self.1;
+                    // SAFETY: The arguments of the call being hooked.
+                    unsafe { (self.0)($($arg),*) }
+                }
+
+                pub unsafe fn call(self, $($arg: $ty),*) -> $ret {
+                    // SAFETY: Forwarded from the caller.
+                    unsafe { (self.0)($($arg),*) }
+                }
+            }
+
+            static SLOT: Slot<dyn for<'call> Fn(Original<'call>, $($ty),*) -> $ret + Send + Sync, Signature> =
+                Slot::new();
 
             unsafe extern "system" fn thunk($($arg: $ty),*) -> $ret {
                 let (detour, original) = SLOT.get();
-                detour(original, $($arg),*)
+                detour(Original(original, ($($arg,)*), PhantomData), $($arg),*)
             }
 
             pub fn rva() -> u32 {
@@ -65,7 +86,7 @@ macro_rules! fixture {
 
             pub fn hook(
                 verification: &'static [u8],
-                detour: impl Fn(Signature, $($ty),*) -> $ret + Send + Sync + 'static,
+                detour: impl for<'call> Fn(Original<'call>, $($ty),*) -> $ret + Send + Sync + 'static,
             ) -> Result<Hook<Signature>> {
                 // SAFETY: `target` is at `rva()` and has type `Signature`, as
                 // does `thunk`, which calls the slot's closure.
@@ -81,12 +102,12 @@ fixture!(leaked: fn(a: i32) -> i32 { black_box(a) + 2 });
 fixture!(verified: fn(a: i32) -> i32 { black_box(a) + 3 });
 fixture!(captures: fn(a: i32) -> i32 { black_box(a) + 4 });
 fixture!(stress: fn(a: i32) -> i32 { black_box(a) + 5 });
+fixture!(changed: fn(a: i32) -> i32 { black_box(a) + 6 });
 
 #[test]
 fn install_enable_disable_original_and_drop() {
-    let hook = lifecycle::hook(&[], |original, a, b| {
-        // SAFETY: The original has this signature.
-        let sum = unsafe { original(a, b) };
+    let hook = lifecycle::hook(&[], |original, _, _| {
+        let sum = original.forward();
         sum * 10
     })
     .expect("hook");
@@ -211,13 +232,65 @@ fn hooks_need_an_initialized_module() {
 }
 
 #[test]
+fn the_original_is_called_with_the_hooked_or_changed_arguments() {
+    let hook = changed::hook(&[], |original, a| {
+        if a < 0 {
+            original.forward()
+        } else {
+            // SAFETY: Any `i32` is a valid argument for this function.
+            unsafe { original.call(a * 2) }
+        }
+    })
+    .expect("hook");
+    hook.enable().expect("enable");
+    assert_eq!(changed::target(-4), 2, "forwarded unchanged");
+    assert_eq!(changed::target(5), 16, "called with a changed argument");
+}
+
+/// Globals of this executable, read and written through [`Global`].
+static mut ALIGNED: u32 = 7;
+
+#[repr(C, packed)]
+struct Packed {
+    tag: u8,
+    value: u32,
+}
+
+static mut PACKED: Packed = Packed { tag: 1, value: 9 };
+
+fn global<T>(address: usize) -> Global<T> {
+    let rva = u32::try_from(address - exe().base().unwrap()).unwrap();
+    Global::new(exe(), rva)
+}
+
+#[test]
+fn plain_globals_read_and_write_aligned_or_not() {
+    let aligned: Global<u32> = global((&raw const ALIGNED) as usize);
+    assert_eq!(aligned.read(), 7);
+    aligned.write(42);
+    assert_eq!(aligned.read(), 42);
+    // SAFETY: The test owns `ALIGNED`; no other thread uses it.
+    assert_eq!(unsafe { (&raw const ALIGNED).read() }, 42);
+
+    // SAFETY: Only the field's address is taken.
+    let value_address = unsafe { &raw const PACKED.value } as usize;
+    let unaligned: Global<u32> = global(value_address);
+    assert!(!unaligned.ptr().is_aligned());
+    assert_eq!(unaligned.read(), 9);
+    unaligned.write(0x0102_0304);
+    assert_eq!(unaligned.read(), 0x0102_0304);
+    // SAFETY: The test owns `PACKED`; no other thread uses it.
+    let tag = unsafe { (&raw const PACKED.tag).read() };
+    assert_eq!(tag, 1, "the neighbour is untouched");
+}
+
+#[test]
 fn closures_keep_their_captured_state() {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&calls);
-    let hook = captures::hook(&[], move |original, a| {
+    let hook = captures::hook(&[], move |original, _| {
         counter.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: The original has this signature.
-        unsafe { original(a) }
+        original.forward()
     })
     .expect("hook");
     hook.enable().expect("enable");
@@ -255,12 +328,8 @@ fn dropping_and_rehooking_while_other_threads_call() {
 
     start.wait();
     for cycle in 0..CYCLES {
-        let hook = stress::hook(&[], move |original, a| {
-            // SAFETY: The original has this signature.
-            let value = unsafe { original(a) };
-            value + 1000 + cycle
-        })
-        .expect("hook");
+        let hook =
+            stress::hook(&[], move |original, _| original.forward() + 1000 + cycle).expect("hook");
         hook.enable().expect("enable");
         thread::yield_now();
         drop(hook);

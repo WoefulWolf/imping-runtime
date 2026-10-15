@@ -126,3 +126,13 @@ fn ansi_decoding_uses_the_system_code_page() {
     buffer.as_array_mut()[..2].copy_from_slice(&[0xe9, 0]);
     assert_eq!(buffer.to_string_ansi().chars().count(), 1);
 }
+
+#[test]
+fn string_types_are_plain_data() {
+    fn assert_plain<T: imping_runtime::Plain>() {}
+    assert_plain::<CStrPtr>();
+    assert_plain::<WStrPtr>();
+    assert_plain::<CStrBuf<16>>();
+    assert_plain::<WStrBuf<16>>();
+    assert_plain::<[CStrPtr; 4]>();
+}
