@@ -6,7 +6,7 @@ Status: early development, not published. Windows x64 only for now; on other pla
 
 ## Development
 
-The crate depends on the sibling `imping-hook` repository by relative path, so check it out next to this one.
+The crate fetches `imping-hook` from GitHub, or uses the local checkout inside a clone of the [imping](https://github.com/WoefulWolf/imping) repository.
 
 Run all checks (formatting, clippy, tests, docs) from the repo root:
 
