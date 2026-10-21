@@ -1,5 +1,4 @@
-//! Strings in the target's memory: pointers to NUL-terminated narrow (`char*`)
-//! and UTF-16 (`wchar_t*`) strings, fixed-size buffers inside structs, and an
+//! C strings in the target's memory: pointers, fixed-size buffers, and an
 //! owned UTF-16 string to pass to the target.
 //!
 //! Every type here has the layout of the C type it stands for, so generated
@@ -16,6 +15,8 @@ use widestring::{U16CStr, U16CString};
 ///
 /// Reading it is `unsafe`: the pointer comes from the target and can't be
 /// checked. A null pointer reads as an empty string.
+///
+/// # Examples
 ///
 /// ```
 /// use imping_runtime::CStrPtr;
@@ -35,28 +36,28 @@ impl CStrPtr {
         Self(ptr)
     }
 
-    /// A null pointer.
+    /// Returns a null pointer.
     pub const fn null() -> Self {
         Self(core::ptr::null())
     }
 
-    /// Whether the pointer is null.
+    /// Returns whether the pointer is null.
     pub fn is_null(self) -> bool {
         self.0.is_null()
     }
 
-    /// The raw pointer.
+    /// Returns the raw pointer.
     pub const fn as_ptr(self) -> *const c_char {
         self.0
     }
 
-    /// The raw pointer, for functions that write through it.
+    /// Returns the raw pointer as `*mut`, for functions that write through it.
     pub const fn as_mut_ptr(self) -> *mut c_char {
         self.0.cast_mut()
     }
 
-    /// The string's bytes, without the terminating NUL. Empty if the pointer
-    /// is null.
+    /// Returns the string's bytes without the terminating NUL, or an empty
+    /// slice if the pointer is null.
     ///
     /// As with [`CStr::from_ptr`], the caller chooses the lifetime `'a`.
     ///
@@ -72,7 +73,7 @@ impl CStrPtr {
         unsafe { CStr::from_ptr(self.0) }.to_bytes()
     }
 
-    /// The string as UTF-8.
+    /// Returns the string as UTF-8.
     ///
     /// # Errors
     ///
@@ -80,25 +81,28 @@ impl CStrPtr {
     ///
     /// # Safety
     ///
-    /// As for [`to_bytes`](Self::to_bytes).
+    /// A non-null pointer must point to a NUL-terminated string that stays
+    /// valid and unchanged for `'a`.
     pub unsafe fn to_str<'a>(self) -> Result<&'a str, Utf8Error> {
         // SAFETY: Forwarded from the caller.
         core::str::from_utf8(unsafe { self.to_bytes() })
     }
 
-    /// The string as UTF-8, with invalid sequences replaced by `�`.
+    /// Returns the string as UTF-8, with invalid sequences replaced by `�`.
     ///
     /// # Safety
     ///
-    /// As for [`to_bytes`](Self::to_bytes).
+    /// A non-null pointer must point to a NUL-terminated string that stays
+    /// valid and unchanged for `'a`.
     pub unsafe fn to_string_lossy<'a>(self) -> Cow<'a, str> {
         // SAFETY: Forwarded from the caller.
         String::from_utf8_lossy(unsafe { self.to_bytes() })
     }
 
-    /// The string decoded with the system's ANSI code page, as the target's
-    /// Windows "A" functions would. On other platforms, the same as
-    /// [`to_string_lossy`](Self::to_string_lossy).
+    /// Decodes the string with the system's ANSI code page, as Windows "A"
+    /// functions do.
+    ///
+    /// On other platforms, the same as [`to_string_lossy`](Self::to_string_lossy).
     ///
     /// # Safety
     ///
@@ -111,7 +115,7 @@ impl CStrPtr {
 }
 
 impl Default for CStrPtr {
-    /// A null pointer.
+    /// Returns a null pointer.
     fn default() -> Self {
         Self::null()
     }
@@ -136,6 +140,8 @@ impl fmt::Debug for CStrPtr {
 /// Reading it is `unsafe`: the pointer comes from the target and can't be
 /// checked. A null pointer reads as an empty string.
 ///
+/// # Examples
+///
 /// ```
 /// use imping_runtime::WString;
 ///
@@ -153,28 +159,28 @@ impl WStrPtr {
         Self(ptr)
     }
 
-    /// A null pointer.
+    /// Returns a null pointer.
     pub const fn null() -> Self {
         Self(core::ptr::null())
     }
 
-    /// Whether the pointer is null.
+    /// Returns whether the pointer is null.
     pub fn is_null(self) -> bool {
         self.0.is_null()
     }
 
-    /// The raw pointer.
+    /// Returns the raw pointer.
     pub const fn as_ptr(self) -> *const u16 {
         self.0
     }
 
-    /// The raw pointer, for functions that write through it.
+    /// Returns the raw pointer as `*mut`, for functions that write through it.
     pub const fn as_mut_ptr(self) -> *mut u16 {
         self.0.cast_mut()
     }
 
-    /// The string's UTF-16 code units, without the terminating NUL. Empty if
-    /// the pointer is null.
+    /// Returns the string's UTF-16 code units without the terminating NUL, or
+    /// an empty slice if the pointer is null.
     ///
     /// As with [`CStr::from_ptr`], the caller chooses the lifetime `'a`.
     ///
@@ -190,7 +196,7 @@ impl WStrPtr {
         unsafe { U16CStr::from_ptr_str(self.0) }.as_slice()
     }
 
-    /// The string as UTF-8, with unpaired surrogates replaced by `�`.
+    /// Returns the string as UTF-8, with unpaired surrogates replaced by `�`.
     ///
     /// # Safety
     ///
@@ -203,7 +209,7 @@ impl WStrPtr {
 }
 
 impl Default for WStrPtr {
-    /// A null pointer.
+    /// Returns a null pointer.
     fn default() -> Self {
         Self::null()
     }
@@ -218,6 +224,8 @@ impl fmt::Debug for WStrPtr {
 /// An owned, NUL-terminated UTF-16 string, to pass to the target as a
 /// `wchar_t*`.
 ///
+/// # Examples
+///
 /// ```
 /// use imping_runtime::WString;
 ///
@@ -228,22 +236,22 @@ impl fmt::Debug for WStrPtr {
 pub struct WString(U16CString);
 
 impl WString {
-    /// An empty string.
+    /// Creates an empty string.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// A pointer to the string, valid while it is alive and unchanged.
+    /// Returns a pointer to the string, valid while it is alive and unchanged.
     pub fn as_ptr(&self) -> WStrPtr {
         WStrPtr(self.0.as_ptr())
     }
 
-    /// The string's UTF-16 code units, without the terminating NUL.
+    /// Returns the string's UTF-16 code units, without the terminating NUL.
     pub fn to_wide(&self) -> &[u16] {
         self.0.as_slice()
     }
 
-    /// The string as UTF-8.
+    /// Returns the string as UTF-8, with unpaired surrogates replaced by `�`.
     pub fn to_string_lossy(&self) -> String {
         self.0.to_string_lossy()
     }
@@ -267,6 +275,8 @@ impl fmt::Debug for WString {
 /// A fixed-size narrow string buffer inside a struct (`char name[N]`),
 /// holding a string up to the first NUL.
 ///
+/// # Examples
+///
 /// ```
 /// use imping_runtime::CStrBuf;
 ///
@@ -279,19 +289,19 @@ impl fmt::Debug for WString {
 pub struct CStrBuf<const N: usize>([u8; N]);
 
 impl<const N: usize> CStrBuf<N> {
-    /// An empty buffer: all zero.
+    /// Creates an empty, all-zero buffer.
     pub const fn new() -> Self {
         Self([0; N])
     }
 
-    /// The string's bytes: up to the first NUL, or the whole buffer if it has
-    /// none.
+    /// Returns the string's bytes: up to the first NUL, or the whole buffer if
+    /// it has none.
     pub fn to_bytes(&self) -> &[u8] {
         let end = self.0.iter().position(|&byte| byte == 0).unwrap_or(N);
         &self.0[..end]
     }
 
-    /// The string as UTF-8.
+    /// Returns the string as UTF-8.
     ///
     /// # Errors
     ///
@@ -300,19 +310,22 @@ impl<const N: usize> CStrBuf<N> {
         core::str::from_utf8(self.to_bytes())
     }
 
-    /// The string as UTF-8, with invalid sequences replaced by `�`.
+    /// Returns the string as UTF-8, with invalid sequences replaced by `�`.
     pub fn to_string_lossy(&self) -> Cow<'_, str> {
         String::from_utf8_lossy(self.to_bytes())
     }
 
-    /// The string decoded with the system's ANSI code page. On other
-    /// platforms, the same as [`to_string_lossy`](Self::to_string_lossy).
+    /// Decodes the string with the system's ANSI code page.
+    ///
+    /// On other platforms, the same as [`to_string_lossy`](Self::to_string_lossy).
     pub fn to_string_ansi(&self) -> String {
         sys::ansi_to_string(self.to_bytes())
     }
 
-    /// Stores `value` as UTF-8: as much as fits before the terminating NUL,
-    /// without splitting a character, then zeros. A NUL in `value` ends it.
+    /// Stores `value` as UTF-8, truncated to fit before the terminating NUL.
+    ///
+    /// Truncation never splits a character. A NUL in `value` ends it, and the
+    /// rest of the buffer is zeroed.
     pub fn set(&mut self, value: &str) {
         let value = value.split('\0').next().unwrap_or_default();
         let mut len = value.len().min(N.saturating_sub(1));
@@ -323,26 +336,27 @@ impl<const N: usize> CStrBuf<N> {
         self.0[..len].copy_from_slice(&value.as_bytes()[..len]);
     }
 
-    /// The whole buffer.
+    /// Returns the whole buffer.
     pub fn as_array(&self) -> &[u8; N] {
         &self.0
     }
 
-    /// The whole buffer, to write to it directly.
+    /// Returns the whole buffer, to write to it directly.
     pub fn as_array_mut(&mut self) -> &mut [u8; N] {
         &mut self.0
     }
 
-    /// A pointer to the buffer, valid while it is alive and unmoved. Reading
-    /// through it needs a NUL within the buffer, which [`set`](Self::set)
-    /// guarantees.
+    /// Returns a pointer to the buffer, valid while it is alive and unmoved.
+    ///
+    /// Reading through it needs a NUL within the buffer, which
+    /// [`set`](Self::set) guarantees.
     pub fn as_ptr(&self) -> CStrPtr {
         CStrPtr(self.0.as_ptr().cast())
     }
 }
 
 impl<const N: usize> Default for CStrBuf<N> {
-    /// An empty buffer: all zero.
+    /// Returns an empty, all-zero buffer.
     fn default() -> Self {
         Self::new()
     }
@@ -359,6 +373,8 @@ impl<const N: usize> fmt::Debug for CStrBuf<N> {
 /// A fixed-size UTF-16 string buffer inside a struct (`wchar_t name[N]`),
 /// holding a string up to the first NUL.
 ///
+/// # Examples
+///
 /// ```
 /// use imping_runtime::WStrBuf;
 ///
@@ -371,26 +387,27 @@ impl<const N: usize> fmt::Debug for CStrBuf<N> {
 pub struct WStrBuf<const N: usize>([u16; N]);
 
 impl<const N: usize> WStrBuf<N> {
-    /// An empty buffer: all zero.
+    /// Creates an empty, all-zero buffer.
     pub const fn new() -> Self {
         Self([0; N])
     }
 
-    /// The string's UTF-16 code units: up to the first NUL, or the whole
-    /// buffer if it has none.
+    /// Returns the string's UTF-16 code units: up to the first NUL, or the
+    /// whole buffer if it has none.
     pub fn to_wide(&self) -> &[u16] {
         let end = self.0.iter().position(|&unit| unit == 0).unwrap_or(N);
         &self.0[..end]
     }
 
-    /// The string as UTF-8, with unpaired surrogates replaced by `�`.
+    /// Returns the string as UTF-8, with unpaired surrogates replaced by `�`.
     pub fn to_string_lossy(&self) -> String {
         String::from_utf16_lossy(self.to_wide())
     }
 
-    /// Stores `value` as UTF-16: as much as fits before the terminating NUL,
-    /// without splitting a surrogate pair, then zeros. A NUL in `value` ends
-    /// it.
+    /// Stores `value` as UTF-16, truncated to fit before the terminating NUL.
+    ///
+    /// Truncation never splits a surrogate pair. A NUL in `value` ends it, and
+    /// the rest of the buffer is zeroed.
     pub fn set(&mut self, value: &str) {
         let value = value.split('\0').next().unwrap_or_default();
         let capacity = N.saturating_sub(1);
@@ -407,26 +424,27 @@ impl<const N: usize> WStrBuf<N> {
         }
     }
 
-    /// The whole buffer.
+    /// Returns the whole buffer.
     pub fn as_array(&self) -> &[u16; N] {
         &self.0
     }
 
-    /// The whole buffer, to write to it directly.
+    /// Returns the whole buffer, to write to it directly.
     pub fn as_array_mut(&mut self) -> &mut [u16; N] {
         &mut self.0
     }
 
-    /// A pointer to the buffer, valid while it is alive and unmoved. Reading
-    /// through it needs a NUL within the buffer, which [`set`](Self::set)
-    /// guarantees.
+    /// Returns a pointer to the buffer, valid while it is alive and unmoved.
+    ///
+    /// Reading through it needs a NUL within the buffer, which
+    /// [`set`](Self::set) guarantees.
     pub fn as_ptr(&self) -> WStrPtr {
         WStrPtr(self.0.as_ptr())
     }
 }
 
 impl<const N: usize> Default for WStrBuf<N> {
-    /// An empty buffer: all zero.
+    /// Returns an empty, all-zero buffer.
     fn default() -> Self {
         Self::new()
     }

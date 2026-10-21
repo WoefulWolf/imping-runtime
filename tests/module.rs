@@ -16,7 +16,7 @@ fn kernel32_build() -> Build {
     }
 }
 
-/// A module accepting exactly `builds`.
+/// Returns a leaked module accepting exactly `builds`.
 fn module(name: &'static str, builds: Vec<Build>) -> &'static Module {
     Box::leak(Box::new(Module::new(name, builds.leak())))
 }

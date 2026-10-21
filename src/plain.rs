@@ -5,14 +5,10 @@ use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr};
 /// A type for which every bit pattern of its size is a valid value, so it can
 /// be read from and written to the target's memory without checks.
 ///
-/// Implemented for the integer and float types, raw pointers to sized types,
-/// the string types, and arrays of plain types. Generated bindings implement it
-/// for their enum newtypes and for structs and unions made only of plain
-/// fields. It is not implemented for `bool`, function pointers or references,
-/// which have invalid bit patterns.
-///
-/// [`Global::read`](crate::Global::read) and
-/// [`Global::write`](crate::Global::write) are safe for plain types.
+/// Implemented for integers, floats, raw pointers to sized types, the string
+/// types and arrays of plain types; generated bindings add enum newtypes and
+/// all-plain structs and unions. `bool`, function pointers and references
+/// have invalid bit patterns, so they aren't plain.
 ///
 /// # Safety
 ///
@@ -34,8 +30,7 @@ plain!(
     u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize, f32, f64
 );
 
-// SAFETY: A raw pointer to a sized type is an address; every address is a
-// valid (if not necessarily dereferenceable) value.
+// SAFETY: any address is a valid raw pointer, dereferenceable or not.
 unsafe impl<T: 'static> Plain for *const T {}
 
 // SAFETY: As for `*const T`.

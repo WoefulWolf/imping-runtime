@@ -38,13 +38,13 @@ impl DerefMut for Player {
     }
 }
 
-/// Stands in for a game function that takes any entity by pointer.
+/// Stands in for a target function that takes any entity by pointer.
 ///
 /// # Safety
 ///
 /// `entity` must point to a live `Entity`.
 unsafe fn teleport(entity: *mut Entity, to: [f32; 3]) {
-    // SAFETY: forwarded to the caller.
+    // SAFETY: forwarded from the caller.
     unsafe { (*entity).position = to };
 }
 

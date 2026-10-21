@@ -27,18 +27,20 @@ pub struct Build {
 /// bindings declare one per IR module as `MODULE`, and their `init()` calls
 /// [`Module::init`].
 ///
+/// # Examples
+///
 /// ```no_run
 /// use imping_runtime::{Build, Module};
 ///
-/// static GAME: Module = Module::new(
-///     "game.exe",
+/// static TARGET: Module = Module::new(
+///     "target.exe",
 ///     &[Build { timestamp: 0x64b8f2a1, image_size: 0xa2b000 }],
 /// );
 ///
 /// # fn main() -> imping_runtime::Result<()> {
-/// // SAFETY: the addresses used with `GAME` belong to this build.
-/// unsafe { GAME.init() }?;
-/// let update = GAME.address(0x15040);
+/// // SAFETY: the addresses used with `TARGET` belong to this build.
+/// unsafe { TARGET.init() }?;
+/// let update = TARGET.address(0x15040);
 /// # let _ = update;
 /// # Ok(())
 /// # }
@@ -51,8 +53,10 @@ pub struct Module {
 }
 
 impl Module {
-    /// Describes a module by its file name (e.g. `"game.exe"`) and the builds
-    /// that may be loaded. With no builds, [`init`](Self::init) always fails.
+    /// Describes a module by its file name, such as `"target.exe"`, and the
+    /// builds it accepts.
+    ///
+    /// With no builds, [`init`](Self::init) always fails.
     pub const fn new(name: &'static str, builds: &'static [Build]) -> Self {
         Self {
             name,
@@ -61,13 +65,12 @@ impl Module {
         }
     }
 
-    /// Finds the module in this process and checks it is one of the accepted
-    /// builds, by comparing the timestamp and image size in its loaded image
-    /// header.
+    /// Finds the module in this process and checks its image header against
+    /// the accepted builds.
     ///
-    /// Once this succeeds, further calls do nothing and return `Ok`. A failure
-    /// is not remembered, so a module that is loaded later (such as a DLL the
-    /// target loads on demand) can be initialized once it is there.
+    /// Once this succeeds, further calls return `Ok` and do nothing. Failures
+    /// aren't remembered, so a DLL the target loads later can be initialized
+    /// once it's there.
     ///
     /// # Errors
     ///
@@ -78,11 +81,10 @@ impl Module {
     ///
     /// # Safety
     ///
-    /// Everything later done through this module — addresses, function
-    /// signatures, type layouts — must be correct for every accepted build.
-    /// `init` checks the identity; the rest is the caller's promise. For
-    /// generated bindings, that means the IR they were generated from must
-    /// correctly describe each build they accept.
+    /// Everything later done through this module (addresses, function
+    /// signatures, type layouts) must be correct for every accepted build;
+    /// `init` only checks the identity. For generated bindings, the IR they
+    /// came from must describe each accepted build correctly.
     pub unsafe fn init(&self) -> Result<()> {
         if self.base().is_some() {
             return Ok(());
@@ -108,12 +110,12 @@ impl Module {
         Ok(())
     }
 
-    /// Finds the module in this process and records its base whatever build it
-    /// is, returning the build found. For trying a build the bindings don't
-    /// list; [`init`](Self::init) is the checked way in.
+    /// Finds the module in this process and records its base whatever its
+    /// build, returning the build found.
     ///
-    /// If the module is already initialized, nothing changes and the loaded
-    /// build is returned. A build that isn't accepted is logged as a warning.
+    /// For trying a build the bindings don't list; [`init`](Self::init) is the
+    /// checked way in. An unlisted build is logged as a warning. If the module
+    /// is already initialized, nothing changes and the loaded build is returned.
     ///
     /// # Errors
     ///
@@ -123,11 +125,11 @@ impl Module {
     ///
     /// # Safety
     ///
-    /// Everything later done through this module — addresses, function
-    /// signatures, type layouts — must be correct for the build that is
-    /// actually loaded, which nothing has checked. Hooks still compare a
-    /// function's first bytes where the bindings know them, but calls, globals
-    /// and raw addresses are used as they are.
+    /// Everything later done through this module (addresses, function
+    /// signatures, type layouts) must be correct for the build actually
+    /// loaded, which nothing has checked. Hooks still verify a function's
+    /// first bytes where the bindings know them; calls, globals and raw
+    /// addresses are used unchecked.
     pub unsafe fn init_any_build(&self) -> Result<Build> {
         let (base, identity) = sys::locate(self.name).map_err(|error| match error {
             sys::LocateError::NotLoaded => Error::ModuleNotLoaded { module: self.name },
@@ -154,13 +156,13 @@ impl Module {
         Ok(found)
     }
 
-    /// The module's file name.
+    /// Returns the module's file name.
     pub fn name(&self) -> &'static str {
         self.name
     }
 
-    /// The module's base address, or `None` until [`init`](Self::init) has
-    /// succeeded.
+    /// Returns the module's base address, or `None` until [`init`](Self::init)
+    /// has succeeded.
     pub fn base(&self) -> Option<usize> {
         match self.base.load(Ordering::Acquire) {
             0 => None,
@@ -168,7 +170,7 @@ impl Module {
         }
     }
 
-    /// The address of `rva`, an address relative to the module's base.
+    /// Returns the address of `rva`, an address relative to the module's base.
     ///
     /// # Panics
     ///

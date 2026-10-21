@@ -1,7 +1,7 @@
 //! The seam between [`Hook`](crate::Hook) and the hooking engine.
 //!
-//! Private for now. Making it public would let a mod loader supply one shared
-//! engine, so that several mods can hook the same function.
+//! Kept private. Opening it up would let a mod loader share one engine, so
+//! several mods could hook the same function.
 
 /// An installed, initially disabled patch redirecting a function.
 pub(crate) trait Patch<F>: Send + Sync {
@@ -9,7 +9,7 @@ pub(crate) trait Patch<F>: Send + Sync {
     fn enable(&self) -> Result<(), imping_hook::Error>;
     /// Restores the target.
     fn disable(&self) -> Result<(), imping_hook::Error>;
-    /// Whether the target is redirected.
+    /// Returns whether the target is redirected.
     fn is_enabled(&self) -> bool;
     /// Redirects the target without suspending other threads.
     ///
@@ -52,21 +52,19 @@ impl<F: imping_hook::Function + Send + Sync> Patch<F> for imping_hook::Hook<F> {
 /// Installs a disabled patch redirecting `target` to `detour`, returning it
 /// and a callable original (the trampoline).
 ///
-/// The returned patch must never be dropped: the trampoline lives only as
-/// long as it does, and a thread may call it at any time.
-///
 /// # Safety
 ///
-/// `target` must be the address of a function with signature `F`, and
-/// `detour` must have that signature too.
+/// - `target` must be the address of a function with signature `F`, and
+///   `detour` must have that signature too.
+/// - The returned patch must never be dropped: the trampoline lives only as
+///   long as it does, and a thread may call it at any time.
 pub(crate) unsafe fn install<F: imping_hook::Function + Send + Sync>(
     target: *const (),
     detour: F,
 ) -> Result<(Box<dyn Patch<F>>, F), imping_hook::Error> {
-    // SAFETY: Forwarded from the caller.
+    // SAFETY: forwarded from the caller.
     let hook = unsafe { imping_hook::Hook::at(target).redirect(detour).install() }?;
-    // SAFETY: The caller keeps the returned patch, and so the trampoline, for
-    // the rest of the process.
+    // SAFETY: the caller keeps the patch, and so the trampoline, forever.
     let original = unsafe { hook.trampoline() };
     Ok((Box::new(hook), original))
 }

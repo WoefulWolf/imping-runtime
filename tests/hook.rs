@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-/// This test executable as a [`Module`], initialized.
+/// Returns this test executable as an initialized [`Module`].
 fn exe() -> &'static Module {
     static EXE: OnceLock<&'static Module> = OnceLock::new();
     EXE.get_or_init(|| {
@@ -50,7 +50,7 @@ macro_rules! fixture {
             pub extern "system" fn target($($arg: $ty),*) -> $ret $body
 
             /// The original function and the arguments of the hooked call.
-            /// Not every fixture uses both of its methods.
+            // Not every fixture uses both methods.
             #[allow(dead_code)]
             pub struct Original<'call>(Signature, ($($ty,)*), PhantomData<&'call ()>);
 
@@ -58,7 +58,7 @@ macro_rules! fixture {
             impl Original<'_> {
                 pub fn forward(self) -> $ret {
                     let ($($arg,)*) = self.1;
-                    // SAFETY: The arguments of the call being hooked.
+                    // SAFETY: these are the hooked call's own arguments.
                     unsafe { (self.0)($($arg),*) }
                 }
 

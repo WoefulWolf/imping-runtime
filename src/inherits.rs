@@ -1,15 +1,19 @@
 //! Base classes: which types derive from which, and pointer upcasts.
 
-/// Marks `Self` as deriving from `B`: every `Self` begins with a `B` at offset
-/// 0, so a pointer to a `Self` is also a valid pointer to its `B`.
+/// Marks `Self` as deriving from `B`, so a pointer to a `Self` is also a valid
+/// pointer to its `B`.
 ///
-/// Generated bindings implement it for every ancestor of a class whose base
-/// class the IR marks, and give the class `Deref` and `DerefMut` to its direct
-/// base, so references reach base fields and coerce to base references by
-/// themselves. For raw pointers, [`Upcast::upcast`] turns a `*mut T` into a
-/// `*mut B` for any `B` that `T` inherits, checked at compile time.
+/// Generated bindings implement it for every ancestor of a class, and give the
+/// class `Deref` and `DerefMut` to its direct base so references reach base
+/// fields and coerce to base references. For raw pointers, use
+/// [`Upcast::upcast`].
 ///
-/// # Example
+/// # Safety
+///
+/// `Self` must have a defined layout (`repr(C)` or `repr(transparent)`) with a
+/// `B` at offset 0, and every valid `Self` must hold a valid `B` there.
+///
+/// # Examples
 ///
 /// ```
 /// use imping_runtime::{Inherits, Upcast};
@@ -32,11 +36,6 @@
 /// heal(pointer.upcast());
 /// assert_eq!(player.base.health, 100);
 /// ```
-///
-/// # Safety
-///
-/// `Self` must have a defined layout (`repr(C)` or `repr(transparent)`) with a
-/// `B` at offset 0, and every valid `Self` must hold a valid `B` there.
 pub unsafe trait Inherits<B> {}
 
 mod sealed {
@@ -46,15 +45,15 @@ mod sealed {
 }
 
 /// Converts a raw pointer to a class into a pointer to one of its base
-/// classes: `*mut T` to `*mut B`, and `*const T` to `*const B`, for any `B`
-/// with `T: Inherits<B>`.
+/// classes, keeping it `*mut` or `*const`.
 ///
-/// The conversion is a plain cast, valid because [`Inherits`] guarantees the
-/// base sits at offset 0; it never dereferences the pointer, so it is safe for
-/// null and dangling pointers too, which stay null or dangling. Implemented
-/// only for raw pointers.
+/// A plain cast, valid because of [`Inherits`]. It never dereferences, so null
+/// and dangling pointers stay null or dangling. Implemented only for raw
+/// pointers.
 ///
-/// A type that is not a base does not compile:
+/// # Examples
+///
+/// A type that isn't a base doesn't compile:
 ///
 /// ```compile_fail
 /// use imping_runtime::Upcast;

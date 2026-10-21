@@ -3,7 +3,7 @@
 use crate::module::Build;
 use core::fmt;
 
-/// The result of a runtime operation.
+/// The result type of this crate's fallible functions.
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// Everything that can go wrong finding a module or hooking a function.
@@ -65,7 +65,7 @@ pub enum Error {
         /// The engine's error.
         source: imping_hook::Error,
     },
-    /// This platform is not supported yet.
+    /// This platform is not supported; only Windows is.
     UnsupportedPlatform,
 }
 

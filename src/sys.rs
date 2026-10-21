@@ -65,9 +65,8 @@ mod imp {
 
     pub(super) fn locate(name: &str) -> Result<(usize, Identity), LocateError> {
         let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
-        // SAFETY: `wide` is a NUL-terminated UTF-16 string that outlives the
-        // call. `GetModuleHandleW` only looks the name up; it neither keeps the
-        // pointer nor changes the module's reference count.
+        // SAFETY: `wide` is NUL-terminated and outlives the call, which doesn't
+        // keep the pointer.
         let handle = unsafe { GetModuleHandleW(wide.as_ptr()) };
         if handle.is_null() {
             return Err(LocateError::NotLoaded);
@@ -87,8 +86,8 @@ mod imp {
     /// `MAX_HEADER_OFFSET` + 0x100 bytes are mapped readable.
     unsafe fn pe_identity(base: usize) -> Option<Identity> {
         let read_u16 = |offset: u32| {
-            // SAFETY: Callers only pass offsets below `MAX_HEADER_OFFSET` +
-            // 0x100, which the caller guarantees are readable.
+            // SAFETY: offsets stay below `MAX_HEADER_OFFSET` + 0x100, which the
+            // caller guarantees are readable.
             unsafe { core::ptr::read_unaligned((base + offset as usize) as *const u16) }
         };
         let read_u32 = |offset: u32| {
