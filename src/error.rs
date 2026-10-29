@@ -37,7 +37,8 @@ pub enum Error {
         /// The module's file name.
         module: &'static str,
     },
-    /// A function does not start with the bytes the bindings expect.
+    /// A function does not start with the bytes the bindings expect, and its
+    /// byte pattern, if it has one, didn't find it elsewhere.
     VerificationFailed {
         /// The module's file name.
         module: &'static str,
@@ -45,8 +46,11 @@ pub enum Error {
         rva: u32,
         /// The bytes the bindings expect.
         expected: &'static [u8],
-        /// The bytes found.
+        /// The bytes found, empty if they'd be past the end of the module.
         found: Vec<u8>,
+        /// Why the pattern didn't find the function, if it has one and that's
+        /// why.
+        scan: Option<imping_hook::Error>,
     },
     /// The function is already hooked by this mod: a [`Hook`](crate::Hook) for
     /// it is still alive.
@@ -106,13 +110,27 @@ impl fmt::Display for Error {
                 rva,
                 expected,
                 found,
-            } => write!(
-                f,
-                "`{module}`+{rva:#x} starts with {}, expected {}; the build differs or another \
-                 mod hooked it",
-                Hex(found),
-                Hex(expected)
-            ),
+                scan,
+            } => {
+                if found.is_empty() {
+                    write!(
+                        f,
+                        "`{module}`+{rva:#x} is past the end of the module; the build differs"
+                    )?;
+                } else {
+                    write!(
+                        f,
+                        "`{module}`+{rva:#x} starts with {}, expected {}; the build differs or \
+                         another mod hooked it",
+                        Hex(found),
+                        Hex(expected)
+                    )?;
+                }
+                match scan {
+                    Some(scan) => write!(f, ", and {scan}"),
+                    None => Ok(()),
+                }
+            }
             Error::AlreadyHooked { module, rva } => {
                 write!(f, "`{module}`+{rva:#x} is already hooked by this mod")
             }
@@ -132,6 +150,9 @@ impl core::error::Error for Error {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Error::Hook { source, .. } => Some(source),
+            Error::VerificationFailed {
+                scan: Some(source), ..
+            } => Some(source),
             _ => None,
         }
     }

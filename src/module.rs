@@ -3,7 +3,7 @@
 use crate::error::{Error, Result};
 use crate::sys;
 use core::fmt;
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// One build of a module, identified by the timestamp and image size in its
 /// image header.
@@ -48,6 +48,10 @@ pub struct Build {
 pub struct Module {
     name: &'static str,
     builds: &'static [Build],
+    /// Whether the loaded build is one of `builds`; set before `base`.
+    listed: AtomicBool,
+    /// The loaded image's size; set before `base`.
+    image_size: AtomicU32,
     /// The module's base address once `init` has succeeded, otherwise 0.
     base: AtomicUsize,
 }
@@ -61,6 +65,8 @@ impl Module {
         Self {
             name,
             builds,
+            listed: AtomicBool::new(false),
+            image_size: AtomicU32::new(0),
             base: AtomicUsize::new(0),
         }
     }
@@ -105,6 +111,8 @@ impl Module {
                 expected: self.builds,
             });
         }
+        self.listed.store(true, Ordering::Release);
+        self.image_size.store(found.image_size, Ordering::Release);
         self.base.store(base, Ordering::Release);
         log::debug!("imping: `{}` found at {base:#x}", self.name);
         Ok(())
@@ -114,8 +122,10 @@ impl Module {
     /// build, returning the build found.
     ///
     /// For trying a build the bindings don't list; [`init`](Self::init) is the
-    /// checked way in. An unlisted build is logged as a warning. If the module
-    /// is already initialized, nothing changes and the loaded build is returned.
+    /// checked way in. An unlisted build is logged as a warning, and generated
+    /// functions then check their first bytes before they're called, falling
+    /// back to their byte pattern. If the module is already initialized,
+    /// nothing changes and the loaded build is returned.
     ///
     /// # Errors
     ///
@@ -127,8 +137,8 @@ impl Module {
     ///
     /// Everything later done through this module (addresses, function
     /// signatures, type layouts) must be correct for the build actually
-    /// loaded, which nothing has checked. Hooks still verify a function's
-    /// first bytes where the bindings know them; calls, globals and raw
+    /// loaded, which nothing has checked. Generated functions still verify
+    /// their first bytes where the bindings know them; globals and raw
     /// addresses are used unchecked.
     pub unsafe fn init_any_build(&self) -> Result<Build> {
         let (base, identity) = sys::locate(self.name).map_err(|error| match error {
@@ -141,7 +151,8 @@ impl Module {
             image_size: identity.image_size,
         };
         if self.base().is_none() {
-            if !self.builds.contains(&found) {
+            let listed = self.builds.contains(&found);
+            if !listed {
                 log::warn!(
                     "imping: `{}` (timestamp {:#x}, image size {:#x}) is not a build the \
                      bindings accept; initialized anyway",
@@ -150,6 +161,8 @@ impl Module {
                     found.image_size
                 );
             }
+            self.listed.store(listed, Ordering::Release);
+            self.image_size.store(found.image_size, Ordering::Release);
             self.base.store(base, Ordering::Release);
             log::debug!("imping: `{}` found at {base:#x}", self.name);
         }
@@ -168,6 +181,17 @@ impl Module {
             0 => None,
             base => Some(base),
         }
+    }
+
+    /// Whether the loaded build is one the bindings list. Only meaningful once
+    /// [`base`](Self::base) is `Some`.
+    pub(crate) fn is_listed(&self) -> bool {
+        self.listed.load(Ordering::Acquire)
+    }
+
+    /// The loaded image's size, or 0 before it's initialized.
+    pub(crate) fn image_size(&self) -> usize {
+        self.image_size.load(Ordering::Acquire) as usize
     }
 
     /// Returns the address of `rva`, an address relative to the module's base.

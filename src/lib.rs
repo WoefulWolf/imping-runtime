@@ -64,6 +64,7 @@
 
 mod backend;
 mod error;
+mod function;
 mod global;
 mod hook;
 mod inherits;
@@ -84,5 +85,6 @@ pub use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr, WString};
 /// generator.
 #[doc(hidden)]
 pub mod __private {
+    pub use crate::function::{Function, Pattern};
     pub use crate::hook::{Slot, install};
 }

@@ -8,6 +8,7 @@
 
 use crate::backend::{self, Patch};
 use crate::error::{Error, Result};
+use crate::function::Function;
 use crate::module::Module;
 use core::fmt;
 use core::marker::PhantomData;
@@ -230,30 +231,27 @@ impl<D: ?Sized + Send + Sync + 'static, F: Copy + 'static> Slot<D, F> {
     }
 }
 
-/// Hooks the function at `rva` in `module` with `detour`, returning the guard
-/// disabled.
+/// Hooks `function` with `detour`, returning the guard disabled.
 ///
 /// Called by a generated function's `hook`. The first install for a function
-/// compares its first bytes with `verification`, when non-empty, before
-/// patching.
+/// finds it before patching: at its RVA if its first bytes match, otherwise
+/// by its pattern.
 ///
 /// # Errors
 ///
-/// - [`Error::NotInitialized`] if `module` isn't initialized.
+/// - [`Error::NotInitialized`] if the function's module isn't initialized.
 /// - [`Error::AlreadyHooked`] if a guard for this function is alive.
-/// - [`Error::VerificationFailed`] if the first bytes differ from
-///   `verification`.
+/// - [`Error::VerificationFailed`] if the first bytes differ and the pattern
+///   doesn't find the function elsewhere.
 /// - [`Error::Hook`] if patching fails.
 ///
 /// # Safety
 ///
-/// - The function at `rva` and `thunk` must both have signature `F`.
+/// - The function and `thunk` must both have signature `F`.
 /// - `thunk` must call the closure and original returned by `slot.get()`, and
 ///   `slot` must only ever be used with this function.
 pub unsafe fn install<D, F>(
-    module: &'static Module,
-    rva: u32,
-    verification: &'static [u8],
+    function: &'static Function,
     slot: &'static Slot<D, F>,
     detour: Box<D>,
     thunk: F,
@@ -262,6 +260,7 @@ where
     D: ?Sized + Send + Sync + 'static,
     F: imping_hook::Function + Copy + Send + Sync + 'static,
 {
+    let module = function.module();
     let Some(base) = module.base() else {
         return Err(Error::NotInitialized {
             module: module.name(),
@@ -270,7 +269,7 @@ where
     if slot.owned.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyHooked {
             module: module.name(),
-            rva,
+            rva: function.rva(),
         });
     }
     // Only the owner gets here, so the first install is never contended.
@@ -278,7 +277,7 @@ where
         Some(installed) => installed,
         None => {
             // SAFETY: forwarded from the caller.
-            match unsafe { install_patch(module, base, rva, verification, thunk) } {
+            match unsafe { install_patch(function, base, thunk) } {
                 Ok(installed) => slot.installed.get_or_init(|| installed),
                 Err(error) => {
                     slot.owned.store(false, Ordering::Release);
@@ -298,36 +297,23 @@ where
     })
 }
 
-/// Verifies the function's first bytes and patches it, disabled.
+/// Finds the function and patches it, disabled.
 ///
 /// # Safety
 ///
-/// The function at `base + rva` in `module` and `thunk` must both have
-/// signature `F`.
+/// The function and `thunk` must both have signature `F`.
 unsafe fn install_patch<F>(
-    module: &'static Module,
+    function: &'static Function,
     base: usize,
-    rva: u32,
-    verification: &'static [u8],
     thunk: F,
 ) -> Result<Installed<F>>
 where
     F: imping_hook::Function + Copy + Send + Sync + 'static,
 {
-    let target = base + rva as usize;
-    if !verification.is_empty() {
-        // SAFETY: the caller promises `target` is a function in a loaded
-        // module, so its first bytes are mapped readable.
-        let found = unsafe { core::slice::from_raw_parts(target as *const u8, verification.len()) };
-        if found != verification {
-            return Err(Error::VerificationFailed {
-                module: module.name(),
-                rva,
-                expected: verification,
-                found: found.to_vec(),
-            });
-        }
-    }
+    let module = function.module();
+    let target = function.locate()?;
+    // Where it was found, which differs from the bindings' RVA if it moved.
+    let rva = target.wrapping_sub(base) as u32;
     // SAFETY: the caller promises the function and `thunk` share signature `F`.
     let (patch, original) =
         unsafe { backend::install(target as *const (), thunk) }.map_err(|source| Error::Hook {
