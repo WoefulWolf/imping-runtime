@@ -70,10 +70,11 @@ mod hook;
 mod inherits;
 mod module;
 mod plain;
+mod rtti;
 mod strings;
 mod sys;
 
-pub use crate::error::{Error, Result};
+pub use crate::error::{Error, Mismatch, Result, VtableMiss};
 pub use crate::global::Global;
 pub use crate::hook::Hook;
 pub use crate::inherits::{Inherits, Upcast};
@@ -85,6 +86,6 @@ pub use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr, WString};
 /// generator.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::function::{Function, Pattern};
+    pub use crate::function::{Function, Pattern, VtableSlot};
     pub use crate::hook::{Slot, install};
 }

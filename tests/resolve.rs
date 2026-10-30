@@ -3,10 +3,11 @@
 
 #![cfg(all(windows, target_arch = "x86_64"))]
 
-use imping_runtime::__private::{Function, Pattern, Slot, install};
-use imping_runtime::{Error, Module};
+use imping_runtime::__private::{Function, Pattern, Slot, VtableSlot, install};
+use imping_runtime::{Error, Mismatch, Module, VtableMiss};
 use std::hint::black_box;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 type Signature = unsafe extern "system" fn(u64) -> u64;
 
@@ -94,6 +95,14 @@ fn unique_start(function: Signature) -> (&'static [u8], &'static str) {
     panic!("no unique start for {:p}", function as *const ());
 }
 
+/// Returns a verification failure's details, or panics.
+fn mismatch(error: &Error) -> &Mismatch {
+    match error {
+        Error::VerificationFailed(mismatch) => mismatch,
+        other => panic!("expected a verification failure, got {other:?}"),
+    }
+}
+
 fn wrong(bytes: &[u8]) -> &'static [u8] {
     Box::leak(bytes.iter().map(|b| !b).collect())
 }
@@ -114,8 +123,26 @@ fn function(
         "fixture",
         rva,
         verification,
+        "",
         pattern,
+        None,
     )))
+}
+
+/// Returns bytes as a shape, with `??` at `wild`.
+fn shape(bytes: &[u8], wild: &[usize]) -> &'static str {
+    let tokens: Vec<String> = bytes
+        .iter()
+        .enumerate()
+        .map(|(i, b)| {
+            if wild.contains(&i) {
+                "??".to_owned()
+            } else {
+                format!("{b:02x}")
+            }
+        })
+        .collect();
+    Box::leak(tokens.join(" ").into_boxed_str())
 }
 
 #[test]
@@ -133,10 +160,8 @@ fn an_unlisted_build_checks_the_bytes_first() {
 
     let wrong = function(unlisted(), rva(in_place), wrong(bytes), None);
     let error = wrong.resolve().unwrap_err();
-    assert!(
-        matches!(&error, Error::VerificationFailed { found, scan: None, .. } if found == bytes),
-        "{error:?}"
-    );
+    assert_eq!(mismatch(&error).found, bytes);
+    assert!(mismatch(&error).scan.is_none(), "{error:?}");
 }
 
 #[test]
@@ -160,11 +185,8 @@ fn a_failed_scan_is_part_of_the_error() {
     let error = function.resolve().unwrap_err();
     assert!(
         matches!(
-            &error,
-            Error::VerificationFailed {
-                scan: Some(imping_hook::Error::PatternNotFound { .. }),
-                ..
-            }
+            mismatch(&error).scan,
+            Some(imping_hook::Error::PatternNotFound { .. })
         ),
         "{error:?}"
     );
@@ -227,9 +249,173 @@ fn a_hook_refuses_changed_bytes_at_the_right_address() {
     let before = changed(3);
     // SAFETY: Nothing is patched, as the bytes differ.
     let error = unsafe { install(function, &SLOT, Box::new(|_, a| a + 1), thunk) }.unwrap_err();
+    assert!(mismatch(&error).scan.is_none(), "{error:?}");
+    assert_eq!(changed(3), before);
+}
+
+#[inline(never)]
+extern "system" fn data_moved(a: u64) -> u64 {
+    black_box(a).wrapping_mul(0x1B87_3593_CC9E_2D51) ^ 0x4CF5_AD43_2745_937F
+}
+
+#[test]
+fn a_hook_accepts_changed_addresses_at_the_right_address() {
+    static SLOT: Slot<dyn Fn(Signature, u64) -> u64 + Send + Sync, Signature> = Slot::new();
+    unsafe extern "system" fn thunk(a: u64) -> u64 {
+        let (detour, original) = SLOT.get();
+        detour(original, a)
+    }
+
+    // As if an address in its first bytes changed: the exact bytes differ at
+    // one place, which the shape leaves out.
+    let (bytes, pattern) = unique_start(data_moved);
+    let mut expected = bytes.to_vec();
+    expected[2] = !expected[2];
+    let function = Box::leak(Box::new(Function::new(
+        listed(),
+        "data_moved",
+        rva(data_moved),
+        Box::leak(expected.into_boxed_slice()),
+        shape(bytes, &[2]),
+        Some(Pattern {
+            bytes: pattern,
+            offset: 0,
+            follow_call: false,
+        }),
+        None,
+    )));
+    // SAFETY: The function is `data_moved`, which has type `Signature`, as
+    // does `thunk`, which calls the slot's closure.
+    let hook = unsafe { install(function, &SLOT, Box::new(|_, a| a + 1), thunk) }.unwrap();
+    hook.enable().unwrap();
+    assert_eq!(data_moved(3), 4);
+}
+
+#[inline(never)]
+extern "system" fn virtual_first(a: u64) -> u64 {
+    black_box(a).wrapping_mul(0x9FB2_1C65_1E98_DF25) ^ 0x2127_599B_F432_5C37
+}
+
+#[inline(never)]
+extern "system" fn virtual_second(a: u64) -> u64 {
+    black_box(a).wrapping_mul(0x8EBC_6AF0_9C88_C6E3) ^ 0x589E_C5B9_F3C2_5A1D
+}
+
+/// A type descriptor: the type_info vtable, a spare pointer, then the name.
+#[repr(C)]
+struct Descriptor {
+    vtable: usize,
+    spare: usize,
+    name: [u8; 22],
+}
+
+static DESCRIPTOR: Descriptor = Descriptor {
+    vtable: 0,
+    spare: 0,
+    name: *b".?AVImpingVirtuals@@\0\0",
+};
+
+/// A complete object locator, filled in once the module's base is known.
+static LOCATOR: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+
+/// A pointer to the locator, then the vtable's two slots.
+static VTABLE: [AtomicUsize; 3] = [const { AtomicUsize::new(0) }; 3];
+
+/// Lays out MSVC RTTI for a class with two virtual functions, as a compiler
+/// would, and returns its type name.
+fn virtual_class() -> &'static str {
+    static NAME: OnceLock<&'static str> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let base = listed().base().unwrap();
+        let rva = |address: usize| u32::try_from(address - base).unwrap();
+        let locator = LOCATOR.as_ptr() as usize;
+        for (field, value) in [
+            1,
+            0,
+            0,
+            rva(&DESCRIPTOR as *const Descriptor as usize),
+            0,
+            rva(locator),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            LOCATOR[field].store(value, Ordering::SeqCst);
+        }
+        VTABLE[0].store(locator, Ordering::SeqCst);
+        VTABLE[1].store(virtual_first as *const () as usize, Ordering::SeqCst);
+        VTABLE[2].store(virtual_second as *const () as usize, Ordering::SeqCst);
+        // The name only from the descriptor, so no other copy of it is around.
+        let end = DESCRIPTOR.name.iter().position(|&b| b == 0).unwrap();
+        std::str::from_utf8(&DESCRIPTOR.name[..end]).unwrap()
+    })
+}
+
+fn virtual_function(type_name: &'static str, index: u32, target: Signature) -> &'static Function {
+    let (bytes, _) = unique_start(target);
+    Box::leak(Box::new(Function::new(
+        unlisted(),
+        "virtual",
+        rva(old_place),
+        bytes,
+        shape(bytes, &[]),
+        None,
+        Some(VtableSlot {
+            type_name,
+            offset: 0,
+            index,
+        }),
+    )))
+}
+
+#[test]
+fn a_virtual_function_is_found_through_its_vtable() {
+    let function = virtual_function(virtual_class(), 1, virtual_second);
+    assert_eq!(
+        function.resolve().unwrap(),
+        virtual_second as *const () as usize
+    );
+}
+
+#[test]
+fn a_slot_that_holds_something_else_is_refused() {
+    let function = virtual_function(virtual_class(), 0, virtual_second);
+    let error = function.resolve().unwrap_err();
     assert!(
-        matches!(error, Error::VerificationFailed { scan: None, .. }),
+        matches!(
+            mismatch(&error).vtable,
+            Some(VtableMiss::ShapeDiffers { index: 0, .. })
+        ),
         "{error:?}"
     );
-    assert_eq!(changed(3), before);
+    assert!(
+        error.to_string().contains(&format!(
+            ", and slot 0 of `{}` starts with ",
+            virtual_class()
+        )),
+        "{error}"
+    );
+}
+
+#[test]
+fn a_missing_class_is_part_of_the_error() {
+    // Built at run time, so the whole name appears nowhere in the module.
+    let middle = black_box("ImpingNoSuchClass");
+    let name: &'static str = Box::leak(format!(".?AV{middle}@@").into_boxed_str());
+    let error = virtual_function(name, 0, virtual_first)
+        .resolve()
+        .unwrap_err();
+    assert!(
+        matches!(
+            mismatch(&error).vtable,
+            Some(VtableMiss::ClassNotFound { .. })
+        ),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .to_string()
+            .ends_with(&format!(", and class `{name}` was not found")),
+        "{error}"
+    );
 }

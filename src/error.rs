@@ -37,21 +37,9 @@ pub enum Error {
         /// The module's file name.
         module: &'static str,
     },
-    /// A function does not start with the bytes the bindings expect, and its
-    /// byte pattern, if it has one, didn't find it elsewhere.
-    VerificationFailed {
-        /// The module's file name.
-        module: &'static str,
-        /// The function's address relative to the module's base.
-        rva: u32,
-        /// The bytes the bindings expect.
-        expected: &'static [u8],
-        /// The bytes found, empty if they'd be past the end of the module.
-        found: Vec<u8>,
-        /// Why the pattern didn't find the function, if it has one and that's
-        /// why.
-        scan: Option<imping_hook::Error>,
-    },
+    /// A function does not start with the bytes the bindings expect, and
+    /// nothing else found it; see [`Mismatch`].
+    VerificationFailed(Box<Mismatch>),
     /// The function is already hooked by this mod: a [`Hook`](crate::Hook) for
     /// it is still alive.
     AlreadyHooked {
@@ -105,32 +93,7 @@ impl fmt::Display for Error {
             Error::NotInitialized { module } => {
                 write!(f, "`{module}` is not initialized; call its `init()` first")
             }
-            Error::VerificationFailed {
-                module,
-                rva,
-                expected,
-                found,
-                scan,
-            } => {
-                if found.is_empty() {
-                    write!(
-                        f,
-                        "`{module}`+{rva:#x} is past the end of the module; the build differs"
-                    )?;
-                } else {
-                    write!(
-                        f,
-                        "`{module}`+{rva:#x} starts with {}, expected {}; the build differs or \
-                         another mod hooked it",
-                        Hex(found),
-                        Hex(expected)
-                    )?;
-                }
-                match scan {
-                    Some(scan) => write!(f, ", and {scan}"),
-                    None => Ok(()),
-                }
-            }
+            Error::VerificationFailed(mismatch) => mismatch.fmt(f),
             Error::AlreadyHooked { module, rva } => {
                 write!(f, "`{module}`+{rva:#x} is already hooked by this mod")
             }
@@ -150,10 +113,134 @@ impl core::error::Error for Error {
     fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Error::Hook { source, .. } => Some(source),
-            Error::VerificationFailed {
-                scan: Some(source), ..
-            } => Some(source),
+            Error::VerificationFailed(mismatch) => match &mismatch.scan {
+                Some(source) => Some(source),
+                None => None,
+            },
             _ => None,
+        }
+    }
+}
+
+/// Why a function wasn't where the bindings expect, and why nothing else found
+/// it: the details of [`Error::VerificationFailed`].
+///
+/// Boxed, so the error stays small as ways to find a function are added.
+///
+/// # Examples
+///
+/// ```no_run
+/// # fn check(error: imping_runtime::Error) {
+/// use imping_runtime::{Error, VtableMiss};
+///
+/// if let Error::VerificationFailed(mismatch) = &error {
+///     if let Some(VtableMiss::ClassNotFound { type_name }) = &mismatch.vtable {
+///         eprintln!("{type_name} is gone from this build");
+///     }
+/// }
+/// # }
+/// ```
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Mismatch {
+    /// The module's file name.
+    pub module: &'static str,
+    /// The function's address relative to the module's base.
+    pub rva: u32,
+    /// The bytes the bindings expect.
+    pub expected: &'static [u8],
+    /// The bytes found, empty if they'd be past the end of the module.
+    pub found: Vec<u8>,
+    /// Why the function's byte pattern didn't find it, if it has one and
+    /// that's why.
+    pub scan: Option<imping_hook::Error>,
+    /// Why its class's vtable didn't lead to it, if it's in one.
+    pub vtable: Option<VtableMiss>,
+}
+
+impl fmt::Display for Mismatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Mismatch { module, rva, .. } = self;
+        if self.found.is_empty() {
+            write!(
+                f,
+                "`{module}`+{rva:#x} is past the end of the module; the build differs"
+            )?;
+        } else {
+            write!(
+                f,
+                "`{module}`+{rva:#x} starts with {}, expected {}; the build differs or another \
+                 mod hooked it",
+                Hex(&self.found),
+                Hex(self.expected)
+            )?;
+        }
+        if let Some(scan) = &self.scan {
+            write!(f, ", and {scan}")?;
+        }
+        match &self.vtable {
+            Some(vtable) => write!(f, ", and {vtable}"),
+            None => Ok(()),
+        }
+    }
+}
+
+/// Why a function couldn't be found through its class's vtable.
+///
+/// Part of a [`Mismatch`]; type names are MSVC's decorated ones, such as
+/// `.?AVEntity@game@@`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum VtableMiss {
+    /// The module has no type information for the class.
+    ClassNotFound {
+        /// The class's type name.
+        type_name: &'static str,
+    },
+    /// The class has no vtable at this offset.
+    VtableNotFound {
+        /// The class's type name.
+        type_name: &'static str,
+        /// The locator's offset, which tells apart a class's vtables.
+        offset: u32,
+    },
+    /// The slot holds a function that doesn't start like this one.
+    ShapeDiffers {
+        /// The class's type name.
+        type_name: &'static str,
+        /// The slot's index.
+        index: u32,
+        /// The bytes the slot's function starts with, empty if it's outside
+        /// the module.
+        found: Vec<u8>,
+    },
+}
+
+impl fmt::Display for VtableMiss {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            VtableMiss::ClassNotFound { type_name } => {
+                write!(f, "class `{type_name}` was not found")
+            }
+            VtableMiss::VtableNotFound { type_name, offset } => {
+                write!(f, "class `{type_name}` has no vtable at offset {offset}")
+            }
+            VtableMiss::ShapeDiffers {
+                type_name,
+                index,
+                found,
+            } if found.is_empty() => {
+                write!(f, "slot {index} of `{type_name}` points outside the module")
+            }
+            VtableMiss::ShapeDiffers {
+                type_name,
+                index,
+                found,
+            } => write!(
+                f,
+                "slot {index} of `{type_name}` starts with {}",
+                Hex(found)
+            ),
         }
     }
 }

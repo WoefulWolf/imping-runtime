@@ -89,6 +89,8 @@ macro_rules! fixture {
                     stringify!($name),
                     rva(),
                     verification,
+                    "",
+                    None,
                     None,
                 )));
                 // SAFETY: `target` is at `rva()` and has type `Signature`, as
@@ -188,15 +190,10 @@ fn verification_bytes_are_checked_before_patching() {
 
     let error = verified::hook(wrong, |_, a| a).unwrap_err();
     match &error {
-        Error::VerificationFailed {
-            rva,
-            expected,
-            found,
-            ..
-        } => {
-            assert_eq!(*rva, verified::rva());
-            assert_eq!(*expected, wrong);
-            assert_eq!(found.as_slice(), actual);
+        Error::VerificationFailed(mismatch) => {
+            assert_eq!(mismatch.rva, verified::rva());
+            assert_eq!(mismatch.expected, wrong);
+            assert_eq!(mismatch.found.as_slice(), actual);
         }
         other => panic!("expected a verification failure, got {other:?}"),
     }
@@ -228,7 +225,7 @@ fn hooks_need_an_initialized_module() {
         let (detour, original) = SLOT.get();
         detour(original)
     }
-    static FUNCTION: Function = Function::new(&NEVER, "never", 0x10, &[], None);
+    static FUNCTION: Function = Function::new(&NEVER, "never", 0x10, &[], "", None, None);
     // SAFETY: The module is not initialized, so nothing is patched.
     let error = unsafe { install(&FUNCTION, &SLOT, Box::new(|_| 0), thunk) }.unwrap_err();
     assert!(matches!(

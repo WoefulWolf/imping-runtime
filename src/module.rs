@@ -1,9 +1,13 @@
 //! Module identity and address resolution.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, VtableMiss};
 use crate::sys;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::Mutex;
+
+/// A vtable looked up by RTTI type name and locator offset, and where it is.
+pub(crate) type FoundVtable = (&'static str, u32, core::result::Result<usize, VtableMiss>);
 
 /// One build of a module, identified by the timestamp and image size in its
 /// image header.
@@ -54,6 +58,8 @@ pub struct Module {
     image_size: AtomicU32,
     /// The module's base address once `init` has succeeded, otherwise 0.
     base: AtomicUsize,
+    /// Vtables looked up by RTTI type name and locator offset.
+    pub(crate) vtables: Mutex<Vec<FoundVtable>>,
 }
 
 impl Module {
@@ -68,6 +74,7 @@ impl Module {
             listed: AtomicBool::new(false),
             image_size: AtomicU32::new(0),
             base: AtomicUsize::new(0),
+            vtables: Mutex::new(Vec::new()),
         }
     }
 
