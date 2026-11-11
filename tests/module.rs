@@ -145,7 +145,7 @@ fn address_panics_before_init() {
 fn globals_read_through_the_module() {
     let module = kernel32();
     let header: Global<u16> = Global::new(module, 0);
-    assert_eq!(header.rva(), 0);
+    assert_eq!(header.rva(), Some(0));
     assert_eq!(header.module().name(), "kernel32.dll");
     // SAFETY: Only the module header is read through this module.
     unsafe { module.init() }.expect("init");

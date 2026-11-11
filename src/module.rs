@@ -3,7 +3,7 @@
 use crate::error::{Error, Result, VtableMiss};
 use crate::sys;
 use core::fmt;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 /// A vtable looked up by RTTI type name and locator offset, and where it is.
@@ -52,8 +52,14 @@ pub struct Build {
 pub struct Module {
     name: &'static str,
     builds: &'static [Build],
-    /// Whether the loaded build is one of `builds`; set before `base`.
-    listed: AtomicBool,
+    /// Which labelled build each of `builds` is, as an index into `labels`;
+    /// empty when there is one unlabelled build.
+    build_of: &'static [usize],
+    /// The labels of the builds the bindings were generated from.
+    labels: &'static [&'static str],
+    /// The loaded build's index into `labels`, or `usize::MAX` if it is none
+    /// of `builds`; set before `base`.
+    build: AtomicUsize,
     /// The loaded image's size; set before `base`.
     image_size: AtomicU32,
     /// The module's base address once `init` has succeeded, otherwise 0.
@@ -68,10 +74,23 @@ impl Module {
     ///
     /// With no builds, [`init`](Self::init) always fails.
     pub const fn new(name: &'static str, builds: &'static [Build]) -> Self {
+        Self::labelled(name, builds, &[], &[])
+    }
+
+    /// As [`new`](Self::new), for bindings generated from several labelled
+    /// builds: `build_of[i]` is the index into `labels` of `builds[i]`.
+    pub(crate) const fn labelled(
+        name: &'static str,
+        builds: &'static [Build],
+        build_of: &'static [usize],
+        labels: &'static [&'static str],
+    ) -> Self {
         Self {
             name,
             builds,
-            listed: AtomicBool::new(false),
+            build_of,
+            labels,
+            build: AtomicUsize::new(usize::MAX),
             image_size: AtomicU32::new(0),
             base: AtomicUsize::new(0),
             vtables: Mutex::new(Vec::new()),
@@ -111,14 +130,14 @@ impl Module {
             timestamp: identity.timestamp,
             image_size: identity.image_size,
         };
-        if !self.builds.contains(&found) {
+        let Some(index) = self.builds.iter().position(|build| *build == found) else {
             return Err(Error::BuildMismatch {
                 module: self.name,
                 found,
                 expected: self.builds,
             });
-        }
-        self.listed.store(true, Ordering::Release);
+        };
+        self.build.store(self.build_of(index), Ordering::Release);
         self.image_size.store(found.image_size, Ordering::Release);
         self.base.store(base, Ordering::Release);
         log::debug!("imping: `{}` found at {base:#x}", self.name);
@@ -158,8 +177,10 @@ impl Module {
             image_size: identity.image_size,
         };
         if self.base().is_none() {
-            let listed = self.builds.contains(&found);
-            if !listed {
+            let index = self.builds.iter().position(|build| *build == found);
+            let build = index.map_or(usize::MAX, |index| self.build_of(index));
+            self.build.store(build, Ordering::Release);
+            if index.is_none() {
                 log::warn!(
                     "imping: `{}` (timestamp {:#x}, image size {:#x}) is not a build the \
                      bindings accept; initialized anyway",
@@ -168,7 +189,6 @@ impl Module {
                     found.image_size
                 );
             }
-            self.listed.store(listed, Ordering::Release);
             self.image_size.store(found.image_size, Ordering::Release);
             self.base.store(base, Ordering::Release);
             log::debug!("imping: `{}` found at {base:#x}", self.name);
@@ -190,10 +210,28 @@ impl Module {
         }
     }
 
-    /// Whether the loaded build is one the bindings list. Only meaningful once
-    /// [`base`](Self::base) is `Some`.
-    pub(crate) fn is_listed(&self) -> bool {
-        self.listed.load(Ordering::Acquire)
+    /// The index into the labels of `builds[index]`: 0 without labels.
+    const fn build_of(&self, index: usize) -> usize {
+        if index < self.build_of.len() {
+            self.build_of[index]
+        } else {
+            0
+        }
+    }
+
+    /// The loaded build's index into the labels, or `None` before `init` or
+    /// for a build none of them is.
+    pub(crate) fn build_index(&self) -> Option<usize> {
+        self.base()?;
+        match self.build.load(Ordering::Acquire) {
+            usize::MAX => None,
+            index => Some(index),
+        }
+    }
+
+    /// The label of the build at `index`, or `""` without labels.
+    pub(crate) fn label(&self, index: usize) -> &'static str {
+        self.labels.get(index).copied().unwrap_or("")
     }
 
     /// The loaded image's size, or 0 before it's initialized.

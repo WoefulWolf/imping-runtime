@@ -243,6 +243,8 @@ impl<D: ?Sized + Send + Sync + 'static, F: Copy + 'static> Slot<D, F> {
 /// - [`Error::AlreadyHooked`] if a guard for this function is alive.
 /// - [`Error::VerificationFailed`] if the first bytes differ and the pattern
 ///   doesn't find the function elsewhere.
+/// - [`Error::NotInBuild`] if the loaded build's IR lacks the function and
+///   nothing else finds it.
 /// - [`Error::Hook`] if patching fails.
 ///
 /// # Safety
@@ -269,7 +271,7 @@ where
     if slot.owned.swap(true, Ordering::AcqRel) {
         return Err(Error::AlreadyHooked {
             module: module.name(),
-            rva: function.rva(),
+            rva: function.known_rva(),
         });
     }
     // Only the owner gets here, so the first install is never contended.

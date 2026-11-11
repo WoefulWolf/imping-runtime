@@ -86,6 +86,33 @@ pub use crate::strings::{CStrBuf, CStrPtr, WStrBuf, WStrPtr, WString};
 /// generator.
 #[doc(hidden)]
 pub mod __private {
-    pub use crate::function::{Function, Pattern, VtableSlot};
+    pub use crate::function::{Function, Pattern, Site, VtableSlot};
     pub use crate::hook::{Slot, install};
+    use crate::{Build, Global, Module};
+
+    /// A module the bindings know several labelled builds of: `build_of[i]` is
+    /// the index into `labels` of `builds[i]`.
+    pub const fn module(
+        name: &'static str,
+        builds: &'static [Build],
+        build_of: &'static [usize],
+        labels: &'static [&'static str],
+    ) -> Module {
+        Module::labelled(name, builds, build_of, labels)
+    }
+
+    /// The loaded build's index into its module's labels, or `None` before
+    /// `init` or for a build none of them is.
+    pub fn build_index(module: &Module) -> Option<usize> {
+        module.build_index()
+    }
+
+    /// A global with an address per labelled build of `module`.
+    pub const fn global<T>(
+        module: &'static Module,
+        name: &'static str,
+        rvas: &'static [Option<u32>],
+    ) -> Global<T> {
+        Global::per_build(module, name, rvas)
+    }
 }

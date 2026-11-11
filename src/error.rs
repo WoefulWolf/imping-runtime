@@ -40,6 +40,18 @@ pub enum Error {
     /// A function does not start with the bytes the bindings expect, and
     /// nothing else found it; see [`Mismatch`].
     VerificationFailed(Box<Mismatch>),
+    /// The loaded build's IR lacks the function, and neither the byte pattern
+    /// of a build that has it nor its class's vtable found it.
+    NotInBuild {
+        /// The module's file name.
+        module: &'static str,
+        /// The function's name, including its namespace.
+        item: &'static str,
+        /// The label of the loaded build.
+        build: &'static str,
+        /// Why the first pattern tried matched nothing, if there was one.
+        scan: Option<imping_hook::Error>,
+    },
     /// The function is already hooked by this mod: a [`Hook`](crate::Hook) for
     /// it is still alive.
     AlreadyHooked {
@@ -94,6 +106,18 @@ impl fmt::Display for Error {
                 write!(f, "`{module}` is not initialized; call its `init()` first")
             }
             Error::VerificationFailed(mismatch) => mismatch.fmt(f),
+            Error::NotInBuild {
+                module,
+                item,
+                build,
+                scan,
+            } => {
+                write!(f, "`{item}` isn't in the {build} IR of `{module}`")?;
+                match scan {
+                    Some(scan) => write!(f, ", and its pattern matched nothing ({scan})"),
+                    None => f.write_str(", and no other build has a pattern for it"),
+                }
+            }
             Error::AlreadyHooked { module, rva } => {
                 write!(f, "`{module}`+{rva:#x} is already hooked by this mod")
             }
@@ -117,6 +141,9 @@ impl core::error::Error for Error {
                 Some(source) => Some(source),
                 None => None,
             },
+            Error::NotInBuild {
+                scan: Some(source), ..
+            } => Some(source),
             _ => None,
         }
     }

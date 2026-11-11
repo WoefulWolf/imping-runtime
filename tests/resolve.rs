@@ -3,7 +3,7 @@
 
 #![cfg(all(windows, target_arch = "x86_64"))]
 
-use imping_runtime::__private::{Function, Pattern, Slot, VtableSlot, install};
+use imping_runtime::__private::{Function, Pattern, Site, Slot, VtableSlot, install};
 use imping_runtime::{Error, Mismatch, Module, VtableMiss};
 use std::hint::black_box;
 use std::sync::OnceLock;
@@ -121,10 +121,12 @@ fn function(
     Box::leak(Box::new(Function::new(
         module,
         "fixture",
-        rva,
-        verification,
-        "",
-        pattern,
+        Box::leak(Box::new([Some(Site {
+            rva,
+            verification,
+            shape: "",
+            pattern,
+        })])),
         None,
     )))
 }
@@ -271,17 +273,20 @@ fn a_hook_accepts_changed_addresses_at_the_right_address() {
     let (bytes, pattern) = unique_start(data_moved);
     let mut expected = bytes.to_vec();
     expected[2] = !expected[2];
-    let function = Box::leak(Box::new(Function::new(
-        listed(),
-        "data_moved",
-        rva(data_moved),
-        Box::leak(expected.into_boxed_slice()),
-        shape(bytes, &[2]),
-        Some(Pattern {
+    let site = Site {
+        rva: rva(data_moved),
+        verification: Box::leak(expected.into_boxed_slice()),
+        shape: shape(bytes, &[2]),
+        pattern: Some(Pattern {
             bytes: pattern,
             offset: 0,
             follow_call: false,
         }),
+    };
+    let function = Box::leak(Box::new(Function::new(
+        listed(),
+        "data_moved",
+        Box::leak(Box::new([Some(site)])),
         None,
     )));
     // SAFETY: The function is `data_moved`, which has type `Signature`, as
@@ -353,13 +358,16 @@ fn virtual_class() -> &'static str {
 
 fn virtual_function(type_name: &'static str, index: u32, target: Signature) -> &'static Function {
     let (bytes, _) = unique_start(target);
+    let site = Site {
+        rva: rva(old_place),
+        verification: bytes,
+        shape: shape(bytes, &[]),
+        pattern: None,
+    };
     Box::leak(Box::new(Function::new(
         unlisted(),
         "virtual",
-        rva(old_place),
-        bytes,
-        shape(bytes, &[]),
-        None,
+        Box::leak(Box::new([Some(site)])),
         Some(VtableSlot {
             type_name,
             offset: 0,

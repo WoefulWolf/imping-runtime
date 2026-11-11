@@ -3,7 +3,7 @@
 
 #![cfg(all(windows, target_arch = "x86_64"))]
 
-use imping_runtime::__private::{Function, Slot, install};
+use imping_runtime::__private::{Function, Site, Slot, install};
 use imping_runtime::{Build, Error, Global, Hook, Module, Result};
 use std::hint::black_box;
 use std::sync::OnceLock;
@@ -84,15 +84,9 @@ macro_rules! fixture {
                 verification: &'static [u8],
                 detour: impl for<'call> Fn(Original<'call>, $($ty),*) -> $ret + Send + Sync + 'static,
             ) -> Result<Hook<Signature>> {
-                let function = Box::leak(Box::new(Function::new(
-                    exe(),
-                    stringify!($name),
-                    rva(),
-                    verification,
-                    "",
-                    None,
-                    None,
-                )));
+                let site = Site { rva: rva(), verification, shape: "", pattern: None };
+                let sites = Box::leak(Box::new([Some(site)]));
+                let function = Box::leak(Box::new(Function::new(exe(), stringify!($name), sites, None)));
                 // SAFETY: `target` is at `rva()` and has type `Signature`, as
                 // does `thunk`, which calls the slot's closure.
                 unsafe { install(function, &SLOT, Box::new(detour), thunk) }
@@ -225,7 +219,17 @@ fn hooks_need_an_initialized_module() {
         let (detour, original) = SLOT.get();
         detour(original)
     }
-    static FUNCTION: Function = Function::new(&NEVER, "never", 0x10, &[], "", None, None);
+    static FUNCTION: Function = Function::new(
+        &NEVER,
+        "never",
+        &[Some(Site {
+            rva: 0x10,
+            verification: &[],
+            shape: "",
+            pattern: None,
+        })],
+        None,
+    );
     // SAFETY: The module is not initialized, so nothing is patched.
     let error = unsafe { install(&FUNCTION, &SLOT, Box::new(|_| 0), thunk) }.unwrap_err();
     assert!(matches!(
